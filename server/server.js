@@ -2,6 +2,7 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const axios = require('axios'); // Nécéssaire pour parler à Google
 
 const app = express();
 app.use(express.static(require('path').join(__dirname, '..', 'public')));
@@ -9,8 +10,12 @@ app.use(express.static(require('path').join(__dirname, '..', 'public')));
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let waiting = []; // file d'attente de sockets
-let rooms = new Map(); // roomId -> { a, b }
+// --- CONFIGURATION ---
+// COLLEX VOTRE CLÉ SECRÈTE (SECRET KEY) ICI
+const RECAPTCHA_SECRET_KEY = '6LeQRRssAAAAANxChZwDaKtu6mDF7xOjcY_HRRX1'; 
+
+let waiting = []; 
+let rooms = new Map();
 
 function safeSend(ws, obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -37,7 +42,12 @@ function endRoom(roomId, notifyOther = true) {
 }
 
 function pairOrQueue(ws) {
-  // évite double mise en file
+  // SECURITE : On bloque si le captcha n'est pas validé
+  if (!ws.isVerified) {
+    safeSend(ws, { type: 'error', reason: 'captcha_required' });
+    return;
+  }
+
   if (waiting.includes(ws)) return;
   if (waiting.length === 0) {
     waiting.push(ws);
@@ -45,23 +55,46 @@ function pairOrQueue(ws) {
   } else {
     const partner = waiting.shift();
     if (partner && partner.readyState === WebSocket.OPEN) createRoom(ws, partner);
-    else pairOrQueue(ws); // partenaire invalide -> réessaie
+    else pairOrQueue(ws);
   }
 }
 
-// anti spam : limiter envoi messages par socket (très basique)
 const RATE_LIMIT_WINDOW_MS = 1000;
-const MAX_MSG_PER_WINDOW = 5;
+const MAX_MSG_PER_WINDOW = 10; // Augmenté un peu pour les photos
 
 wss.on('connection', (ws) => {
   ws.isAlive = true;
+  ws.isVerified = false; // Par défaut : bloqué
   ws.msgTimestamps = [];
 
-  ws.on('message', (raw) => {
+  ws.on('message', async (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch(e) { return; }
 
-    // rate limiting
+    // --- 1. VERIFICATION CAPTCHA ---
+    if (msg.type === 'verify_captcha') {
+      const token = msg.token;
+      if (!token) return;
+
+      try {
+        // On demande à Google si le token est valide
+        const googleUrl = `https://www.google.com/recaptcha/api/siteverify?secret=${RECAPTCHA_SECRET_KEY}&response=${token}`;
+        const response = await axios.post(googleUrl);
+        
+        if (response.data.success) {
+          ws.isVerified = true;
+          safeSend(ws, { type: 'captcha_success' });
+        } else {
+          safeSend(ws, { type: 'error', reason: 'captcha_failed' });
+        }
+      } catch (err) {
+        console.error("Erreur Google:", err.message);
+        safeSend(ws, { type: 'error', reason: 'server_error' });
+      }
+      return;
+    }
+
+    // Rate limiting
     const now = Date.now();
     ws.msgTimestamps = ws.msgTimestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
     if (ws.msgTimestamps.length >= MAX_MSG_PER_WINDOW) {
@@ -70,76 +103,57 @@ wss.on('connection', (ws) => {
     }
     ws.msgTimestamps.push(now);
 
+    // Si pas vérifié, on ignore les autres messages
+    if (!ws.isVerified) return;
+
+    // --- LOGIQUE STANDARD ---
     if (msg.type === 'find_partner') {
       pairOrQueue(ws);
-    } else if (msg.type === 'chat') {
-      const roomId = ws.roomId;
-      if (!roomId) { safeSend(ws, { type: 'error', reason: 'not_paired' }); return; }
-      const room = rooms.get(roomId);
-      if (!room) { safeSend(ws, { type: 'error', reason: 'room_missing' }); return; }
-      const other = room.a === ws ? room.b : room.a;
-      safeSend(other, { type: 'chat', text: msg.text });
 
-  
+    } else if (msg.type === 'chat') {
+      const room = rooms.get(ws.roomId);
+      if (room) {
+        const other = room.a === ws ? room.b : room.a;
+        safeSend(other, { type: 'chat', text: msg.text });
+      }
+
+    } else if (msg.type === 'next') {
+      if (ws.roomId) {
+        endRoom(ws.roomId, true);
+      }
+      pairOrQueue(ws);
+
+    // --- LOGIQUE PHOTOS ---
     } else if (msg.type === 'request_photo') {
-      // L'utilisateur A demande à envoyer des photos
       const room = rooms.get(ws.roomId);
       if (room) {
         const other = room.a === ws ? room.b : room.a;
         safeSend(other, { type: 'request_photo' });
       }
+
     } else if (msg.type === 'response_photo') {
-      // L'utilisateur B accepte ou refuse
       const room = rooms.get(ws.roomId);
       if (room) {
         const other = room.a === ws ? room.b : room.a;
-        // msg.accepted sera true ou false
         safeSend(other, { type: 'response_photo', accepted: msg.accepted });
       }
+
     } else if (msg.type === 'photo_data') {
-      // Envoi de l'image (en base64)
       const room = rooms.get(ws.roomId);
       if (room) {
         const other = room.a === ws ? room.b : room.a;
         safeSend(other, { type: 'photo_data', image: msg.image });
       }
     }
-
-    else if (msg.type === 'next') {
-      // user wants new partner: end current room and requeue them
-      if (ws.roomId) {
-        const rid = ws.roomId;
-        const room = rooms.get(rid);
-        const other = room && (room.a === ws ? room.b : room.a);
-        // end room and notify other
-        endRoom(rid, true);
-        // the other one goes back to queue automatically if still connected
-        if (other && other.readyState === WebSocket.OPEN) pairOrQueue(other);
-      }
-      // now requeue the requester
-      pairOrQueue(ws);
-    }
   });
 
   ws.on('close', () => {
-    // si en file => retirer
     waiting = waiting.filter(s => s !== ws);
-    // si dans une room => finir la room et requeue l'autre
     if (ws.roomId) {
-      const rid = ws.roomId;
-      const room = rooms.get(rid);
-      if (room) {
-        const other = room.a === ws ? room.b : room.a;
-        endRoom(rid, false);
-        if (other && other.readyState === WebSocket.OPEN) {
-          safeSend(other, { type: 'partner_left' });
-          pairOrQueue(other);
-        }
-      }
+      endRoom(ws.roomId, false);
     }
   });
 
-  // ping/pong minimal pour détecter morts
   ws.on('pong', () => ws.isAlive = true);
 });
 

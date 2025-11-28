@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <title>Cache-cache</title>
+  
+  <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
   <style>
-    /* ... (Gardez vos variables CSS existantes) ... */
     :root {
       --bg-dark: #0a0a0a;
       --bg-panel: #141414;
@@ -15,95 +17,105 @@
     }
 
     body {
-      margin: 0;
-      padding: 0;
-      height: 100vh;
-      background: var(--bg-dark);
-      font-family: "Inter", sans-serif;
-      color: var(--text-light);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      margin: 0; padding: 0; height: 100vh; background: var(--bg-dark);
+      font-family: "Inter", sans-serif; color: var(--text-light);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
     }
 
-    /* ... (Gardez vos styles existants pour h1, chat-container, etc.) ... */
     h1 { font-weight: 700; margin-bottom: 20px; color: var(--pink); letter-spacing: 1px; }
+
+    /* CHAT CONTAINER */
     #chat-container { width: 95%; max-width: 540px; background: var(--bg-panel); border-radius: var(--radius); padding: 15px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 0 20px #00000080; }
     #status { font-size: 14px; padding: 6px 10px; background: #ffffff10; border-radius: var(--radius); text-align: center; color: var(--pink-light); }
     #messages { height: 360px; overflow-y: auto; padding: 10px; background: #ffffff05; border-radius: var(--radius); display: flex; flex-direction: column; gap: 8px; }
+    
     .sys { font-size: 13px; color: #bbbbbb; text-align: center; }
     .me { align-self: flex-end; background: var(--pink); color: #000; padding: 8px 12px; border-radius: var(--radius); max-width: 70%; word-wrap: break-word; }
     .other { align-self: flex-start; background: #ffffff15; padding: 8px 12px; border-radius: var(--radius); max-width: 70%; word-wrap: break-word; }
-    
-    /* Styles pour les images dans le chat */
     .chat-img { max-width: 100%; border-radius: 10px; margin-top: 5px; display: block; }
 
     #controls { display: flex; gap: 10px; flex-wrap: wrap; }
     
-    button { background: var(--pink); border: none; padding: 10px 16px; border-radius: var(--radius); font-weight: 600; cursor: pointer; color: #000; transition: 0.2s; white-space: nowrap;}
+    button { background: var(--pink); border: none; padding: 10px 16px; border-radius: var(--radius); font-weight: 600; cursor: pointer; color: #000; transition: 0.2s; white-space: nowrap; }
     button:disabled { background: #ffffff30; color: #777; cursor: default; }
     button:hover:not(:disabled) { background: var(--pink-light); }
     
     #input { flex: 1; padding: 10px 14px; border-radius: var(--radius); border: none; outline: none; background: #ffffff10; color: var(--text-light); min-width: 150px; }
 
-    /* --- NOUVEAUX STYLES POUR LA MODALE --- */
-    #verification-modal {
+    /* MODALES (Popup) */
+    .modal-overlay {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.9);
+      background: rgba(0,0,0,0.95);
       display: flex; align-items: center; justify-content: center;
       z-index: 9999;
     }
     .modal-content {
       background: var(--bg-panel); padding: 30px; border-radius: var(--radius);
       text-align: center; max-width: 400px; width: 90%;
-      border: 1px solid var(--pink);
+      border: 1px solid var(--pink); display: flex; flex-direction: column; gap: 20px; align-items: center;
     }
-    .checkbox-container {
-      display: flex; align-items: center; gap: 10px; justify-content: center;
-      margin: 20px 0; font-size: 16px;
-    }
-    input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--pink); }
-    
-    /* Bouton photo caché par défaut */
     .hidden { display: none !important; }
+
+    /* Checkbox custom */
+    .checkbox-wrapper { display: flex; align-items: center; gap: 10px; color: #fff; font-size: 1.1em; }
+    input[type=checkbox] { transform: scale(1.5); accent-color: var(--pink); }
+
+    /* Camera */
+    #camera-preview { width: 100%; border-radius: 10px; background: #000; }
+    .btn-group { display: flex; gap: 10px; justify-content: center; width: 100%; }
+
   </style>
 </head>
 <body>
 
-  <div id="verification-modal">
+  <div id="verification-modal" class="modal-overlay">
     <div class="modal-content">
-      <h2>Vérification</h2>
-      <p>Bienvenue sur Cache-cache.</p>
+      <h2 style="color:var(--pink); margin:0;">Vérification</h2>
+      <p>Pour accéder au chat, veuillez confirmer :</p>
       
-      <div class="checkbox-container">
+      <div class="checkbox-wrapper">
         <input type="checkbox" id="age-check">
         <label for="age-check">J'ai plus de 18 ans</label>
       </div>
 
-      <div class="checkbox-container" style="background: #fff; color: #000; padding: 10px; border-radius: 5px; justify-content: flex-start; width: fit-content; margin: 0 auto 20px auto;">
-        <input type="checkbox" id="captcha-check">
-        <label for="captcha-check" style="font-size: 14px;">Je ne suis pas un robot</label>
-        <img src="https://www.gstatic.com/recaptcha/api2/logo_48.png" style="height: 24px; margin-left: 10px;">
+      <div class="g-recaptcha" 
+           data-sitekey="6LeQRRssAAAAAH3k9ua5G30Fau5rTIXu1DargNn0" 
+           data-callback="onCaptchaSuccess"
+           data-theme="dark">
       </div>
 
-      <button id="enter-btn" disabled>Entrer</button>
+      <button id="enter-btn" disabled>Entrer dans le chat</button>
+    </div>
+  </div>
+
+  <div id="camera-modal" class="modal-overlay hidden">
+    <div class="modal-content" style="max-width:500px;">
+      <h3>Prendre une photo</h3>
+      <video id="camera-preview" autoplay playsinline></video>
+      <canvas id="camera-canvas" class="hidden"></canvas> <div class="btn-group">
+        <button id="snap-btn">📸 Capturer</button>
+        <button id="close-cam-btn" style="background:#444; color:#fff;">Annuler</button>
+      </div>
     </div>
   </div>
 
   <h1>Cache-cache</h1>
 
   <div id="chat-container">
-    <div id="status">Déconnecté</div>
+    <div id="status">En attente de vérification...</div>
     <div id="messages"></div>
 
     <div id="controls">
       <button id="start">Start</button>
       <button id="next" disabled>Next</button>
       
-      <button id="req-photo" disabled title="Demander à partager des photos">📷 ?</button>
+      <button id="req-photo" disabled title="Demander partage photo">📷 ?</button>
+      
+      <div id="photo-actions" class="hidden" style="display:flex; gap:8px;">
+        <button id="btn-file" title="Fichier">📁</button>
+        <button id="btn-cam" title="Caméra">📸</button>
+      </div>
       <input type="file" id="file-input" accept="image/*" class="hidden">
-      <button id="send-photo" class="hidden">Envoyer 📷</button>
 
       <input id="input" placeholder="Votre message..." />
       <button id="send" disabled>Envoyer</button>
@@ -111,10 +123,9 @@
   </div>
 
   <div id="copyright" style="margin-top: 20px; text-align: center;">
-    <h3>cache-cache all right reserved</h3>
+    <h3>cache-cache all rights reserved</h3>
   </div>
 
   <script src="client.js"></script>
 </body>
 </html>
-

@@ -1,6 +1,6 @@
 // public/client.js
 
-// Éléments existants
+// Éléments du DOM
 const statusEl = document.getElementById('status');
 const messagesEl = document.getElementById('messages');
 const startBtn = document.getElementById('start');
@@ -8,31 +8,55 @@ const nextBtn = document.getElementById('next');
 const sendBtn = document.getElementById('send');
 const input = document.getElementById('input');
 
-// Nouveaux éléments
+// Éléments Photos
 const reqPhotoBtn = document.getElementById('req-photo');
-const sendPhotoBtn = document.getElementById('send-photo');
+const photoActions = document.getElementById('photo-actions'); // Conteneur des boutons fichier/cam
+const btnFile = document.getElementById('btn-file');
+const btnCam = document.getElementById('btn-cam');
 const fileInput = document.getElementById('file-input');
 
-// --- LOGIQUE DE VERIFICATION (MODALE) ---
-const modal = document.getElementById('verification-modal');
-const ageCheck = document.getElementById('age-check');
-const captchaCheck = document.getElementById('captcha-check');
+// Éléments Verification
+const modalVerif = document.getElementById('verification-modal');
 const enterBtn = document.getElementById('enter-btn');
+const ageCheck = document.getElementById('age-check');
 
-function checkValidation() {
-  // Active le bouton seulement si les deux sont cochés
-  enterBtn.disabled = !(ageCheck.checked && captchaCheck.checked);
-}
+// Éléments Caméra Modal
+const modalCam = document.getElementById('camera-modal');
+const video = document.getElementById('camera-preview');
+const canvas = document.getElementById('camera-canvas');
+const snapBtn = document.getElementById('snap-btn');
+const closeCamBtn = document.getElementById('close-cam-btn');
+
+let socket;
+let captchaToken = null;
+let isVerified = false;
+
+// --- 1. GESTION DE LA VERIFICATION (Captcha + Age) ---
+
+// Fonction appelée automatiquement par Google quand le user coche la case
+window.onCaptchaSuccess = function(token) {
+  console.log("Captcha résolu !");
+  captchaToken = token;
+  checkValidation();
+};
 
 ageCheck.addEventListener('change', checkValidation);
-captchaCheck.addEventListener('change', checkValidation);
+
+function checkValidation() {
+  // On active le bouton Entrer seulement si : Age coché ET Captcha token présent
+  if (ageCheck.checked && captchaToken) {
+    enterBtn.disabled = false;
+  } else {
+    enterBtn.disabled = true;
+  }
+}
 
 enterBtn.addEventListener('click', () => {
-  modal.style.display = 'none'; // Cache la modale
-  connect(); // Lance la connexion WebSocket seulement après validation
+  modalVerif.style.display = 'none'; // Cache la modale
+  connect(); // Lance la connexion WebSocket
 });
 
-// --- LOGIQUE DU CHAT ---
+// --- 2. FONCTIONS UTILITAIRES ---
 
 function addLine(text, cls='sys') {
   const div = document.createElement('div');
@@ -42,112 +66,116 @@ function addLine(text, cls='sys') {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// Fonction pour afficher une image
-function addImage(base64Src, cls='other') {
+function addImage(base64, cls='other') {
   const div = document.createElement('div');
   div.className = cls;
   const img = document.createElement('img');
-  img.src = base64Src;
+  img.src = base64;
   img.className = 'chat-img';
   div.appendChild(img);
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-// Réinitialise l'interface photo quand on change de partenaire
 function resetPhotoUI() {
-  reqPhotoBtn.disabled = true; // Désactivé tant qu'on n'est pas matché
-  reqPhotoBtn.style.display = 'inline-block';
-  sendPhotoBtn.classList.add('hidden');
-  fileInput.value = ''; // Reset fichier
+  reqPhotoBtn.disabled = true;         // Désactive le bouton demande
+  reqPhotoBtn.style.display = 'block'; // Le ré-affiche
+  photoActions.classList.add('hidden'); // Cache les boutons d'envoi
 }
 
-let socket;
+// --- 3. WEBSOCKET ---
 
-// Note: J'ai déplacé l'appel connect() à l'intérieur du bouton "Entrer" plus haut
 function connect() {
   socket = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host);
   
   socket.onopen = () => {
-    statusEl.textContent = 'Connecté au serveur';
-    addLine('Connexion au serveur établie', 'sys');
+    statusEl.textContent = 'Vérification en cours...';
+    // IMMEDIATEMENT envoyer le token au serveur
+    socket.send(JSON.stringify({ type: 'verify_captcha', token: captchaToken }));
   };
 
   socket.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
 
-    if (msg.type === 'queued') {
+    // --- Reponse du serveur sur le Captcha ---
+    if (msg.type === 'captcha_success') {
+      isVerified = true;
+      statusEl.textContent = 'Connecté (Vérifié)';
+      addLine('Sécurité validée. Cliquez sur Start.', 'sys');
+      startBtn.disabled = false;
+
+    } else if (msg.type === 'error' && msg.reason === 'captcha_failed') {
+      alert("Erreur de vérification Captcha. Veuillez recharger la page.");
+      socket.close();
+
+    // --- Logique Chat Standard ---
+    } else if (msg.type === 'queued') {
       addLine('En attente d’un partenaire...', 'sys');
-      startBtn.disabled = true;
-      nextBtn.disabled = true;
-      sendBtn.disabled = true;
+      startBtn.disabled = true; nextBtn.disabled = true; sendBtn.disabled = true;
       resetPhotoUI();
 
     } else if (msg.type === 'matched') {
       addLine("Vous êtes connecté à un inconnu.", 'sys');
-      startBtn.disabled = true;
-      nextBtn.disabled = false;
-      sendBtn.disabled = false;
-      reqPhotoBtn.disabled = false; // On peut maintenant demander des photos
+      startBtn.disabled = true; nextBtn.disabled = false; sendBtn.disabled = false;
+      
+      // On peut maintenant demander des photos
+      reqPhotoBtn.disabled = false;
 
     } else if (msg.type === 'chat') {
       addLine(msg.text, 'other');
 
     } else if (msg.type === 'ended' || msg.type === 'partner_left') {
       addLine("Le partenaire est parti.", 'sys');
-      nextBtn.disabled = true;
-      sendBtn.disabled = true;
-      startBtn.disabled = false;
+      nextBtn.disabled = true; sendBtn.disabled = true; startBtn.disabled = false;
       resetPhotoUI();
 
-    } else if (msg.type === 'error') {
-      addLine('Erreur: ' + msg.reason, 'sys');
-
-    // --- GESTION PHOTO ---
+    // --- Logique Photos ---
     } else if (msg.type === 'request_photo') {
-      // L'autre veut partager des photos
-      const accept = confirm("Le partenaire souhaite activer le partage de photos. Acceptez-vous ?");
-      socket.send(JSON.stringify({ type: 'response_photo', accepted: accept }));
-      if (accept) {
-        addLine("Vous avez accepté le partage de photos.", 'sys');
-        reqPhotoBtn.style.display = 'none'; // Plus besoin de demander
-        sendPhotoBtn.classList.remove('hidden'); // On peut envoyer
+      // L'autre demande
+      if (confirm("Le partenaire souhaite échanger des photos. Acceptez-vous ?")) {
+        socket.send(JSON.stringify({ type: 'response_photo', accepted: true }));
+        activatePhotoSharing();
+        addLine("Vous avez accepté le partage.", 'sys');
       } else {
-        addLine("Vous avez refusé le partage de photos.", 'sys');
+        socket.send(JSON.stringify({ type: 'response_photo', accepted: false }));
+        addLine("Vous avez refusé le partage.", 'sys');
       }
 
     } else if (msg.type === 'response_photo') {
-      // Réponse à ma demande
+      // Réponse à MA demande
       if (msg.accepted) {
-        addLine("Le partenaire a accepté le partage de photos !", 'sys');
-        reqPhotoBtn.style.display = 'none';
-        sendPhotoBtn.classList.remove('hidden');
+        addLine("Le partenaire a accepté !", 'sys');
+        activatePhotoSharing();
       } else {
-        addLine("Le partenaire a refusé le partage de photos.", 'sys');
+        addLine("Le partenaire a refusé les photos.", 'sys');
       }
 
     } else if (msg.type === 'photo_data') {
-      // Réception d'une image
       addImage(msg.image, 'other');
     }
   };
 
   socket.onclose = () => {
     statusEl.textContent = 'Déconnecté';
-    addLine('Déconnecté du serveur', 'sys');
     startBtn.disabled = false;
-    nextBtn.disabled = true;
-    sendBtn.disabled = true;
-    resetPhotoUI();
   };
 }
 
-// --- EVENTS ---
+function activatePhotoSharing() {
+  reqPhotoBtn.style.display = 'none';      // On cache le "?"
+  photoActions.classList.remove('hidden'); // On affiche [File] [Cam]
+}
+
+// --- 4. LISTENERS BOUTONS ---
 
 startBtn.onclick = () => {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'find_partner' }));
-    addLine('Recherche d’un partenaire...', 'sys');
+  if (isVerified) socket.send(JSON.stringify({ type: 'find_partner' }));
+};
+
+nextBtn.onclick = () => {
+  if (isVerified) {
+    socket.send(JSON.stringify({ type: 'next' }));
+    resetPhotoUI();
   }
 };
 
@@ -158,56 +186,79 @@ sendBtn.onclick = () => {
   socket.send(JSON.stringify({ type: 'chat', text }));
   input.value = '';
 };
-
-nextBtn.onclick = () => {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'next' }));
-    addLine('Recherche d’un nouveau partenaire...', 'sys');
-    nextBtn.disabled = true;
-    sendBtn.disabled = true;
-    resetPhotoUI();
-  }
-};
-
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); sendBtn.click(); }
 });
 
-// --- EVENTS PHOTO ---
+// --- 5. LOGIQUE PHOTOS ---
 
-// 1. Demander la permission
+// A. Demander
 reqPhotoBtn.onclick = () => {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: 'request_photo' }));
-    addLine('Demande de partage de photos envoyée...', 'sys');
-  }
+  socket.send(JSON.stringify({ type: 'request_photo' }));
+  addLine("Demande de photos envoyée...", 'sys');
 };
 
-// 2. Clic sur le bouton "Envoyer Photo" -> ouvre le sélecteur de fichier
-sendPhotoBtn.onclick = () => {
-  fileInput.click();
-};
+// B. Upload Fichier
+btnFile.onclick = () => fileInput.click();
 
-// 3. Quand un fichier est choisi
 fileInput.onchange = () => {
   const file = fileInput.files[0];
   if (!file) return;
-
-  // Limite de taille simple (ex: 2MB pour ne pas saturer le websocket)
-  if (file.size > 2 * 1024 * 1024) {
-    alert("L'image est trop lourde (max 2MB)");
-    return;
-  }
-
+  // Max 2MB
+  if (file.size > 2 * 1024 * 1024) return alert("Image trop lourde (Max 2Mo)");
+  
   const reader = new FileReader();
   reader.onload = (e) => {
     const base64 = e.target.result;
-    
-    // Afficher chez soi
-    addImage(base64, 'me');
-    
-    // Envoyer au serveur
-    socket.send(JSON.stringify({ type: 'photo_data', image: base64 }));
+    addImage(base64, 'me'); // Affiche chez moi
+    socket.send(JSON.stringify({ type: 'photo_data', image: base64 })); // Envoie
   };
   reader.readAsDataURL(file);
 };
+
+// C. Caméra
+let stream = null;
+
+btnCam.onclick = async () => {
+  try {
+    // Demande accès webcam
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    video.srcObject = stream;
+    modalCam.classList.remove('hidden');
+  } catch(err) {
+    alert("Erreur caméra : " + err.message);
+  }
+};
+
+closeCamBtn.onclick = () => {
+  stopCamera();
+  modalCam.classList.add('hidden');
+};
+
+snapBtn.onclick = () => {
+  if (!stream) return;
+  
+  // 1. Dessiner la vidéo sur le canvas invisible
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
+  // 2. Convertir en image base64 (JPEG qualité 0.8)
+  const base64 = canvas.toDataURL('image/jpeg', 0.8);
+  
+  // 3. Envoyer et fermer
+  addImage(base64, 'me');
+  socket.send(JSON.stringify({ type: 'photo_data', image: base64 }));
+  
+  stopCamera();
+  modalCam.classList.add('hidden');
+};
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+  video.srcObject = null;
+}
